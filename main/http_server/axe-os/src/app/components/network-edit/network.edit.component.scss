@@ -1,0 +1,12 @@
+.pi {
+    right: 1rem;
+    font-size: 1.5rem;
+    top: 1rem;
+}
+
+// Network mode toggle buttons - ensure text is visible when selected
+button[type="button"] {
+    &:not(.p-button-outlined) {
+        color: white !important;
+    }
+}

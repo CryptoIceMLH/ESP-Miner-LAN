@@ -1,0 +1,676 @@
+/**
+ * @file ethernet_w5500.c
+ * @brief W5500 Ethernet driver for ESP-Miner using WIZnet ioLibrary
+ * Based on SolarBit ESP32-S3 implementation
+ */
+
+#include "w5500_config.h"
+#include "ethernet_w5500.h"
+#include "wizchip_conf.h"
+#include "w5500.h"
+#include "socket.h"
+#include "dhcp.h"
+#include "esp_log.h"
+#include "esp_mac.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
+#include "nvs_config.h"
+#include <string.h>
+
+static const char *TAG = "w5500_eth";
+
+// SPI configuration from Kconfig
+#define W5500_SPI_HOST      SPI2_HOST
+#define W5500_SPI_MOSI      CONFIG_W5500_SPI_MOSI
+#define W5500_SPI_MISO      CONFIG_W5500_SPI_MISO
+#define W5500_SPI_SCLK      CONFIG_W5500_SPI_SCLK
+#define W5500_SPI_CS        CONFIG_W5500_SPI_CS
+#define W5500_SPI_CLOCK_MHZ CONFIG_W5500_SPI_CLOCK_MHZ
+
+// Module state
+static bool eth_initialized = false;
+static bool eth_hw_available = false;
+static bool eth_link_up = false;
+static bool eth_got_ip = false;
+static uint8_t eth_mac_addr[6];
+static wiz_NetInfo net_info;
+static spi_device_handle_t spi_handle = NULL;
+
+// DHCP state
+#define DHCP_SOCKET 0
+#define DHCP_BUF_SIZE 548
+static uint8_t dhcp_buffer[DHCP_BUF_SIZE];
+static TaskHandle_t dhcp_task_handle = NULL;
+static bool dhcp_running = false;
+static uint64_t dhcp_1s_tick = 0;
+
+// Forward declarations for DHCP callbacks
+static void dhcp_assign_callback(void);
+static void dhcp_update_callback(void);
+static void dhcp_conflict_callback(void);
+static void dhcp_task(void *arg);
+
+// SPI callback functions for WIZnet library
+static void wizchip_select(void) {
+    // CS handled automatically by ESP-IDF SPI driver
+}
+
+static void wizchip_deselect(void) {
+    // CS handled automatically by ESP-IDF SPI driver
+}
+
+static uint8_t wizchip_read_byte(void) {
+    uint8_t rx_data = 0;
+    spi_transaction_t t = {
+        .length = 8,
+        .rx_buffer = &rx_data,
+        .tx_buffer = NULL
+    };
+    spi_device_transmit(spi_handle, &t);
+    return rx_data;
+}
+
+static void wizchip_write_byte(uint8_t wb) {
+    spi_transaction_t t = {
+        .length = 8,
+        .tx_buffer = &wb,
+        .rx_buffer = NULL
+    };
+    spi_device_transmit(spi_handle, &t);
+}
+
+static void wizchip_read_burst(uint8_t* pBuf, uint16_t len) {
+    spi_transaction_t t = {
+        .length = len * 8,
+        .rx_buffer = pBuf,
+        .tx_buffer = NULL
+    };
+    spi_device_transmit(spi_handle, &t);
+}
+
+static void wizchip_write_burst(uint8_t* pBuf, uint16_t len) {
+    spi_transaction_t t = {
+        .length = len * 8,
+        .tx_buffer = pBuf,
+        .rx_buffer = NULL
+    };
+    spi_device_transmit(spi_handle, &t);
+}
+
+/**
+ * @brief Generate unique MAC address from ESP32 chip ID
+ */
+static void generate_mac_address(uint8_t *mac) {
+    uint8_t base_mac[6];
+    esp_err_t err = esp_efuse_mac_get_default(base_mac);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to get base MAC, using fallback");
+        mac[0] = 0x02;
+        mac[1] = 0x00;
+        mac[2] = 0x00;
+        mac[3] = 0x00;
+        mac[4] = 0x00;
+        mac[5] = 0x01;
+        return;
+    }
+
+    // Derive Ethernet MAC from WiFi MAC
+    mac[0] = base_mac[0] | 0x02;  // Locally administered
+    mac[1] = base_mac[1];
+    mac[2] = base_mac[2];
+    mac[3] = base_mac[3];
+    mac[4] = base_mac[4];
+    mac[5] = base_mac[5] ^ 0x01;  // Differentiate from WiFi
+
+    ESP_LOGI(TAG, "Generated MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+esp_err_t ethernet_w5500_init(void) {
+    if (eth_initialized) {
+        ESP_LOGW(TAG, "Ethernet already initialized");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Initializing W5500 Ethernet...");
+    ESP_LOGI(TAG, "SPI Pins - MOSI:%d MISO:%d SCLK:%d CS:%d",
+             W5500_SPI_MOSI, W5500_SPI_MISO, W5500_SPI_SCLK, W5500_SPI_CS);
+
+    // Initialize SPI bus
+    spi_bus_config_t buscfg = {
+        .miso_io_num = W5500_SPI_MISO,
+        .mosi_io_num = W5500_SPI_MOSI,
+        .sclk_io_num = W5500_SPI_SCLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+    };
+
+    esp_err_t ret = spi_bus_initialize(W5500_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "SPI bus already initialized (OK)");
+    } else if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus initialization failed: %s", esp_err_to_name(ret));
+        return ret;
+    } else {
+        ESP_LOGI(TAG, "SPI bus initialized successfully");
+    }
+
+    // Configure SPI device
+    spi_device_interface_config_t devcfg = {
+        .command_bits = 0,
+        .address_bits = 0,
+        .mode = 0,
+        .clock_speed_hz = W5500_SPI_CLOCK_MHZ * 1000 * 1000,
+        .spics_io_num = W5500_SPI_CS,
+        .queue_size = 7,
+        .flags = 0,
+    };
+
+    ESP_LOGI(TAG, "Configuring SPI device: Mode 0, Clock %d MHz", W5500_SPI_CLOCK_MHZ);
+
+    ret = spi_bus_add_device(W5500_SPI_HOST, &devcfg, &spi_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI device add failed: %s", esp_err_to_name(ret));
+        spi_bus_free(W5500_SPI_HOST);
+        return ret;
+    }
+    ESP_LOGI(TAG, "SPI device added successfully");
+
+    // Register SPI callback functions
+    reg_wizchip_cs_cbfunc(wizchip_select, wizchip_deselect);
+    reg_wizchip_spi_cbfunc(wizchip_read_byte, wizchip_write_byte);
+    reg_wizchip_spiburst_cbfunc(wizchip_read_burst, wizchip_write_burst);
+    ESP_LOGI(TAG, "WIZnet SPI callbacks registered");
+
+    // Give W5500 time to power up and stabilize
+    ESP_LOGI(TAG, "Waiting for W5500 to power up and stabilize...");
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    ESP_LOGI(TAG, "Testing SPI communication with W5500...");
+
+    // Try to read version register multiple times
+    uint8_t version = 0;
+    for (int attempt = 0; attempt < 10; attempt++) {
+        version = getVERSIONR();
+        ESP_LOGI(TAG, "Attempt %d/10: Version register read = 0x%02X (expected 0x04)",
+                 attempt + 1, version);
+        if (version == 0x04 || version == 0x01) {
+            if (version == 0x04) {
+                ESP_LOGI(TAG, "✓ W5500 chip detected successfully!");
+            } else {
+                ESP_LOGW(TAG, "⚠ Chip version 0x01 detected (expected 0x04). May be clone/variant. Proceeding...");
+            }
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    if (version != 0x04 && version != 0x01) {
+        ESP_LOGE(TAG, "W5500 hardware not found (version: 0x%02X, expected 0x04 or 0x01)", version);
+        ESP_LOGE(TAG, "Check: 1) Wiring 2) Power (3.3V) 3) Module orientation");
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(W5500_SPI_HOST);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Initialize W5500 chip memory
+    ESP_LOGI(TAG, "Initializing W5500 chip memory buffers...");
+    uint8_t memsize[2][8] = {{2, 2, 2, 2, 2, 2, 2, 2}, {2, 2, 2, 2, 2, 2, 2, 2}};
+    if (ctlwizchip(CW_INIT_WIZCHIP, (void*)memsize) == -1) {
+        ESP_LOGE(TAG, "W5500 chip memory initialization failed");
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(W5500_SPI_HOST);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "W5500 memory buffers initialized (8x2KB TX/RX per socket)");
+
+    ESP_LOGI(TAG, "W5500 chip version: 0x%02X ✓", version);
+    eth_hw_available = true;
+
+    // Generate and set MAC address
+    generate_mac_address(eth_mac_addr);
+    ESP_LOGI(TAG, "Generated MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             eth_mac_addr[0], eth_mac_addr[1], eth_mac_addr[2],
+             eth_mac_addr[3], eth_mac_addr[4], eth_mac_addr[5]);
+
+    ESP_LOGI(TAG, "Setting W5500 MAC address...");
+    setSHAR(eth_mac_addr);
+
+    // Clone chips need delay after MAC write
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    // Verify MAC was set correctly
+    uint8_t read_mac[6];
+    getSHAR(read_mac);
+
+    ESP_LOGI(TAG, "MAC readback: %02X:%02X:%02X:%02X:%02X:%02X",
+             read_mac[0], read_mac[1], read_mac[2], read_mac[3], read_mac[4], read_mac[5]);
+
+    // Check if MAC write failed (clone chip issue) - but continue anyway
+    if (memcmp(eth_mac_addr, read_mac, 6) != 0) {
+        ESP_LOGW(TAG, "⚠ W5500 MAC write failed - clone chip may not accept MAC address");
+        ESP_LOGW(TAG, "Continuing with default MAC (W5500 will still work)");
+        // Use the readback MAC in net_info
+        memcpy(eth_mac_addr, read_mac, 6);
+    } else {
+        ESP_LOGI(TAG, "✓ MAC address verified successfully");
+    }
+
+    // Configure network settings
+    memset(&net_info, 0, sizeof(net_info));
+    memcpy(net_info.mac, eth_mac_addr, 6);
+
+    // Check NVS setting for DHCP vs Static IP (runtime config from UI)
+    uint16_t use_dhcp = nvs_config_get_u16(NVS_CONFIG_ETH_USE_DHCP, 1);
+
+    if (use_dhcp) {
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+        ESP_LOGI(TAG, "Starting DHCP client for automatic IP configuration");
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+
+    // Set temporary zero IP while DHCP is acquiring
+    net_info.ip[0] = 0;
+    net_info.ip[1] = 0;
+    net_info.ip[2] = 0;
+    net_info.ip[3] = 0;
+    net_info.gw[0] = 0;
+    net_info.gw[1] = 0;
+    net_info.gw[2] = 0;
+    net_info.gw[3] = 0;
+    net_info.sn[0] = 0;
+    net_info.sn[1] = 0;
+    net_info.sn[2] = 0;
+    net_info.sn[3] = 0;
+    net_info.dns[0] = 0;
+    net_info.dns[1] = 0;
+    net_info.dns[2] = 0;
+    net_info.dns[3] = 0;
+
+    // Apply zero IP temporarily
+    ctlnetwork(CN_SET_NETINFO, (void*)&net_info);
+
+    // Initialize DHCP
+    DHCP_init(DHCP_SOCKET, dhcp_buffer);
+
+    // Register DHCP callbacks
+    reg_dhcp_cbfunc(dhcp_assign_callback, dhcp_update_callback, dhcp_conflict_callback);
+
+    // Start DHCP background task
+    dhcp_running = true;
+    dhcp_1s_tick = esp_timer_get_time() / 1000000;
+
+    BaseType_t task_created = xTaskCreate(
+        dhcp_task,
+        "dhcp_task",
+        4096,
+        NULL,
+        5,
+        &dhcp_task_handle
+    );
+
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create DHCP task!");
+        dhcp_running = false;
+        return ESP_FAIL;
+    }
+
+        ESP_LOGI(TAG, "DHCP client started on socket %d", DHCP_SOCKET);
+        eth_got_ip = false;  // Will be set to true when DHCP assigns IP
+    } else {
+        ESP_LOGI(TAG, "Using Static IP configuration");
+
+        // Read static IP from NVS (set by user in UI)
+        char *static_ip_str = nvs_config_get_string(NVS_CONFIG_ETH_STATIC_IP, "192.168.1.121");
+        char *gateway_str = nvs_config_get_string(NVS_CONFIG_ETH_GATEWAY, "192.168.1.1");
+        char *netmask_str = nvs_config_get_string(NVS_CONFIG_ETH_NETMASK, "255.255.255.0");
+        char *dns_str = nvs_config_get_string(NVS_CONFIG_ETH_DNS, "8.8.8.8");
+
+        // Parse static IP from NVS strings
+        sscanf(static_ip_str, "%hhu.%hhu.%hhu.%hhu",
+               &net_info.ip[0], &net_info.ip[1], &net_info.ip[2], &net_info.ip[3]);
+        sscanf(gateway_str, "%hhu.%hhu.%hhu.%hhu",
+               &net_info.gw[0], &net_info.gw[1], &net_info.gw[2], &net_info.gw[3]);
+        sscanf(netmask_str, "%hhu.%hhu.%hhu.%hhu",
+               &net_info.sn[0], &net_info.sn[1], &net_info.sn[2], &net_info.sn[3]);
+        sscanf(dns_str, "%hhu.%hhu.%hhu.%hhu",
+               &net_info.dns[0], &net_info.dns[1], &net_info.dns[2], &net_info.dns[3]);
+
+        free(static_ip_str);
+        free(gateway_str);
+        free(netmask_str);
+        free(dns_str);
+
+        // Apply network configuration
+        ctlnetwork(CN_SET_NETINFO, (void*)&net_info);
+
+        ESP_LOGI(TAG, "Static IP Configuration:");
+        ESP_LOGI(TAG, "  IP: %d.%d.%d.%d",
+                 net_info.ip[0], net_info.ip[1], net_info.ip[2], net_info.ip[3]);
+        ESP_LOGI(TAG, "  Gateway: %d.%d.%d.%d",
+                 net_info.gw[0], net_info.gw[1], net_info.gw[2], net_info.gw[3]);
+        ESP_LOGI(TAG, "  Subnet: %d.%d.%d.%d",
+                 net_info.sn[0], net_info.sn[1], net_info.sn[2], net_info.sn[3]);
+        ESP_LOGI(TAG, "  DNS: %d.%d.%d.%d",
+                 net_info.dns[0], net_info.dns[1], net_info.dns[2], net_info.dns[3]);
+
+        eth_got_ip = true;  // Static IP is available immediately
+    }
+
+    // Add delay after configuration to let chip stabilize
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    // Check link status
+    ESP_LOGI(TAG, "Checking PHY link status...");
+    uint8_t link = wizphy_getphylink();
+    if (link == PHY_LINK_ON) {
+        ESP_LOGI(TAG, "✓ Ethernet cable CONNECTED (PHY link UP)");
+        eth_link_up = true;
+        eth_got_ip = true;  // If static IP, we have IP immediately
+    } else {
+        ESP_LOGW(TAG, "⚠ Ethernet cable NOT CONNECTED (PHY link DOWN)");
+        ESP_LOGW(TAG, "   Please connect an Ethernet cable to see network LEDs");
+        eth_link_up = false;
+    }
+
+    eth_initialized = true;
+    ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+    ESP_LOGI(TAG, "W5500 Hardware Status: DETECTED & INITIALIZED ✓");
+    ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+
+    return ESP_OK;
+}
+
+bool ethernet_w5500_is_available(void) {
+    return eth_hw_available;
+}
+
+bool ethernet_w5500_is_connected(void) {
+    if (!eth_initialized || !eth_hw_available) {
+        return false;
+    }
+
+    // Check physical link status
+    uint8_t link = wizphy_getphylink();
+    eth_link_up = (link == PHY_LINK_ON);
+
+    return eth_link_up && eth_got_ip;
+}
+
+esp_err_t ethernet_w5500_get_ip(char *ip_str, size_t len) {
+    if (ip_str == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!eth_initialized || !eth_hw_available) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Get current network info
+    wiz_NetInfo current_info;
+    ctlnetwork(CN_GET_NETINFO, (void*)&current_info);
+
+    snprintf(ip_str, len, "%d.%d.%d.%d",
+             current_info.ip[0], current_info.ip[1],
+             current_info.ip[2], current_info.ip[3]);
+
+    return ESP_OK;
+}
+
+esp_err_t ethernet_w5500_get_mac(char *mac_str, size_t len) {
+    if (mac_str == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!eth_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    snprintf(mac_str, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+             eth_mac_addr[0], eth_mac_addr[1], eth_mac_addr[2],
+             eth_mac_addr[3], eth_mac_addr[4], eth_mac_addr[5]);
+
+    return ESP_OK;
+}
+
+void ethernet_w5500_check_link(void) {
+    if (!eth_initialized || !eth_hw_available) {
+        return;
+    }
+
+    uint8_t link = wizphy_getphylink();
+    bool new_link_status = (link == PHY_LINK_ON);
+
+    if (new_link_status != eth_link_up) {
+        eth_link_up = new_link_status;
+        if (eth_link_up) {
+            ESP_LOGI(TAG, "Ethernet link UP");
+            eth_got_ip = true;  // With static IP, we have IP when link is up
+        } else {
+            ESP_LOGI(TAG, "Ethernet link DOWN");
+            eth_got_ip = false;
+        }
+    }
+}
+
+bool ethernet_w5500_get_link_status(void) {
+    if (!eth_initialized || !eth_hw_available) {
+        return false;
+    }
+
+    uint8_t link = wizphy_getphylink();
+    return (link == PHY_LINK_ON);
+}
+
+esp_err_t ethernet_w5500_stop(void) {
+    if (!eth_initialized) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Stopping Ethernet...");
+
+    // Stop DHCP task if running
+    if (dhcp_running && dhcp_task_handle != NULL) {
+        ESP_LOGI(TAG, "Stopping DHCP task...");
+        dhcp_running = false;
+        DHCP_stop();
+
+        // Wait for task to finish
+        int timeout = 50;  // 5 seconds
+        while (dhcp_task_handle != NULL && timeout-- > 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        if (dhcp_task_handle != NULL) {
+            ESP_LOGW(TAG, "DHCP task didn't stop gracefully, deleting...");
+            vTaskDelete(dhcp_task_handle);
+            dhcp_task_handle = NULL;
+        }
+    }
+
+    if (spi_handle != NULL) {
+        spi_bus_remove_device(spi_handle);
+        spi_handle = NULL;
+    }
+
+    spi_bus_free(W5500_SPI_HOST);
+
+    eth_initialized = false;
+    eth_hw_available = false;
+    eth_link_up = false;
+    eth_got_ip = false;
+
+    ESP_LOGI(TAG, "Ethernet stopped");
+    return ESP_OK;
+}
+
+esp_err_t ethernet_w5500_restart(void) {
+    ESP_LOGI(TAG, "Restarting Ethernet...");
+
+    esp_err_t ret = ethernet_w5500_stop();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    return ethernet_w5500_init();
+}
+
+/* DHCP Callback Functions */
+static void dhcp_assign_callback(void) {
+    ESP_LOGI(TAG, "✓ DHCP IP Assigned!");
+
+    getIPfromDHCP(net_info.ip);
+    getGWfromDHCP(net_info.gw);
+    getSNfromDHCP(net_info.sn);
+    getDNSfromDHCP(net_info.dns);
+
+    // Apply network configuration to W5500
+    ctlnetwork(CN_SET_NETINFO, (void*)&net_info);
+
+    ESP_LOGI(TAG, "DHCP Network Configuration:");
+    ESP_LOGI(TAG, "  IP: %d.%d.%d.%d",
+             net_info.ip[0], net_info.ip[1], net_info.ip[2], net_info.ip[3]);
+    ESP_LOGI(TAG, "  Gateway: %d.%d.%d.%d",
+             net_info.gw[0], net_info.gw[1], net_info.gw[2], net_info.gw[3]);
+    ESP_LOGI(TAG, "  Subnet: %d.%d.%d.%d",
+             net_info.sn[0], net_info.sn[1], net_info.sn[2], net_info.sn[3]);
+    ESP_LOGI(TAG, "  DNS: %d.%d.%d.%d",
+             net_info.dns[0], net_info.dns[1], net_info.dns[2], net_info.dns[3]);
+
+    eth_got_ip = true;
+}
+
+static void dhcp_update_callback(void) {
+    ESP_LOGI(TAG, "⚠ DHCP IP Changed!");
+    dhcp_assign_callback();
+}
+
+static void dhcp_conflict_callback(void) {
+    ESP_LOGE(TAG, "✗ DHCP IP Conflict detected!");
+    eth_got_ip = false;
+}
+
+/* DHCP Background Task */
+static void dhcp_task(void *arg) {
+    ESP_LOGI(TAG, "DHCP task started");
+
+    // Wait for initialization to complete PHY check first (prevent SPI collision)
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    uint8_t dhcp_state = DHCP_FAILED;
+    uint8_t dhcp_fail_count = 0;
+    bool using_static_ip = false;
+
+    while (dhcp_running) {
+        // Check PHY link before running DHCP
+        uint8_t link = wizphy_getphylink();
+        if (link != PHY_LINK_ON) {
+            if (eth_link_up) {
+                ESP_LOGW(TAG, "Ethernet cable disconnected - waiting for link...");
+                eth_link_up = false;
+                eth_got_ip = false;
+                dhcp_fail_count = 0;
+                using_static_ip = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        } else if (!eth_link_up) {
+            ESP_LOGI(TAG, "Ethernet cable connected - starting DHCP...");
+            eth_link_up = true;
+            dhcp_fail_count = 0;
+        }
+
+        // If DHCP failed 3 times, use static IP (like Arduino code)
+        if (!using_static_ip && dhcp_fail_count >= 3) {
+            ESP_LOGW(TAG, "╔════════════════════════════════════════════════════════╗");
+            ESP_LOGW(TAG, "║ DHCP failed after 3 attempts - Using static IP fallback ║");
+            ESP_LOGW(TAG, "╚════════════════════════════════════════════════════════╝");
+
+            // Configure static IP (matching Arduino: 192.168.1.121)
+            net_info.ip[0] = 192;
+            net_info.ip[1] = 168;
+            net_info.ip[2] = 1;
+            net_info.ip[3] = 121;
+            net_info.gw[0] = 192;
+            net_info.gw[1] = 168;
+            net_info.gw[2] = 1;
+            net_info.gw[3] = 1;
+            net_info.sn[0] = 255;
+            net_info.sn[1] = 255;
+            net_info.sn[2] = 255;
+            net_info.sn[3] = 0;
+            net_info.dns[0] = 8;
+            net_info.dns[1] = 8;
+            net_info.dns[2] = 8;
+            net_info.dns[3] = 8;
+
+            ctlnetwork(CN_SET_NETINFO, (void*)&net_info);
+
+            ESP_LOGW(TAG, "Static IP: %d.%d.%d.%d",
+                     net_info.ip[0], net_info.ip[1], net_info.ip[2], net_info.ip[3]);
+            ESP_LOGW(TAG, "Gateway:   %d.%d.%d.%d",
+                     net_info.gw[0], net_info.gw[1], net_info.gw[2], net_info.gw[3]);
+            ESP_LOGW(TAG, "Subnet:    %d.%d.%d.%d",
+                     net_info.sn[0], net_info.sn[1], net_info.sn[2], net_info.sn[3]);
+
+            eth_got_ip = true;
+            using_static_ip = true;
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
+        // Skip DHCP if already using static IP
+        if (using_static_ip) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Handle 1-second tick for DHCP
+        uint64_t now = esp_timer_get_time() / 1000000;
+        if (now != dhcp_1s_tick) {
+            dhcp_1s_tick = now;
+            DHCP_time_handler();
+        }
+
+        // Run DHCP state machine
+        dhcp_state = DHCP_run();
+
+        // Always yield after DHCP_run to prevent starving IDLE task
+        taskYIELD();
+
+        switch (dhcp_state) {
+            case DHCP_IP_ASSIGN:
+                ESP_LOGI(TAG, "DHCP state: IP_ASSIGN");
+                dhcp_fail_count = 0;
+                break;
+            case DHCP_IP_CHANGED:
+                ESP_LOGI(TAG, "DHCP state: IP_CHANGED");
+                dhcp_fail_count = 0;
+                break;
+            case DHCP_IP_LEASED:
+                // IP is leased, just maintain it
+                break;
+            case DHCP_FAILED:
+                dhcp_fail_count++;
+                ESP_LOGW(TAG, "DHCP failed (attempt %d/3), retrying...", dhcp_fail_count);
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                break;
+            case DHCP_RUNNING:
+                // Still acquiring IP - yield to other tasks
+                vTaskDelay(pdMS_TO_TICKS(10));
+                break;
+            default:
+                break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    ESP_LOGI(TAG, "DHCP task stopped");
+    dhcp_task_handle = NULL;
+    vTaskDelete(NULL);
+}

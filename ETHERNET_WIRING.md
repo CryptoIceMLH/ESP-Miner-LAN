@@ -1,23 +1,3 @@
-# ESP-Miner-LAN
-
-
-
-<a href="https://www.molonlabe.holdings/" target="_blank">molonlabe.holdings</a> for more details about my work!
-
-If you wish to support my work you can donate with BTC:
-
-⚡ BTC LN : cryptoice@walletofsatoshi.com
-
-⚡ BTC Onchain: 347ePgUhyvztUWVZ4YZBmBLgTn8hxUFNeQ
-
-Stay Tuned for updates! 
-<a href="https://x.com/MolonLabeVC" target="_blank">@MolonLabeVC</a> on X 
-
-
-
-
-![](bitaxelan1.jpg)
-
 # W5500 Ethernet Module Wiring Guide
 
 This guide provides the pin connections required to add W5500 Ethernet connectivity to your BitAxe miner running the ESP-Miner-LAN firmware.
@@ -201,12 +181,9 @@ To use a static IP address:
 - **W5500 Datasheet**: https://www.wiznet.io/product-item/w5500/
 - **ESP-IDF Ethernet Documentation**: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/network/esp_eth.html
 - **BitAxe Project**: https://github.com/bitaxeorg/bitaxe
-- **ORIGINAL ESP-Miner Firmware**: https://github.com/bitaxeorg/ESP-Miner
+- **ESP-Miner Firmware**: https://github.com/bitaxeorg/ESP-Miner
 
 
 
 ##
 **⚠️ WARNING**: Incorrect wiring can damage your ESP32 and/or W5500 module. Double-check all connections before applying power. When in doubt, consult the data sheets or ask for help in the community Discord. The Author takes NO responsibility.  Use this project content at your OWN RISK! 
-
-
-

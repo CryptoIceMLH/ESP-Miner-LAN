@@ -1,0 +1,102 @@
+
+> axe-os@0.0.0 build
+> ng build --configuration=production && gzipper compress --verbose --gzip --gzip-level 9 --exclude woff2 ./dist/axe-os && node only-gzip.js && node generate-version.js
+
+- Generating browser application bundles (phase: setup)...
+✔ Browser application bundle generation complete.
+✔ Browser application bundle generation complete.
+- Copying assets...
+✔ Copying assets complete.
+- Generating index html...
+✔ Index html generation complete.
+
+[1mInitial chunk files[22m          [2m | [22m[1mNames[22m        [2m | [22m [1mRaw size[22m[2m | [22m[1mEstimated transfer size[22m
+[32mmain.a26399af2e397c71.js[39m     [2m | [22m[2mmain[22m         [2m | [22m  [36m1.41 MB[39m[2m | [22m              [36m309.07 kB[39m
+[32mstyles.aef65f365c92ea7a.css[39m  [2m | [22m[2mstyles[22m       [2m | [22m[36m551.81 kB[39m[2m | [22m               [36m39.40 kB[39m
+[32mpolyfills.180f022a61085ac8.js[39m[2m | [22m[2mpolyfills[22m    [2m | [22m [36m34.80 kB[39m[2m | [22m               [36m11.35 kB[39m
+[32mruntime.249c7a60d4c7096d.js[39m  [2m | [22m[2mruntime[22m      [2m | [22m  [36m1.16 kB[39m[2m | [22m              [36m633 bytes[39m
+
+[1m [22m                            [2m | [22m[1mInitial total[22m[2m | [22m  [1m2.00 MB[22m[2m | [22m              [1m360.46 kB[22m
+
+Build at: 2025-10-05T11:35:10.844Z - Hash: 227e51547b956ea4 - Time: 21716ms
+[30;46mgzipper:[0m[36m Compression GZIP | level: 9[0m
+[30;46mgzipper:[0m[36m Default output file format: [filename].[ext].[compressExt][0m
+[30;46mgzipper:[0m[36m [1] Worker has started.[0m
+[30;46mgzipper:[0m[36m [3] Worker has started.[0m
+[30;46mgzipper:[0m[36m [2] Worker has started.[0m
+gzipper: File 3rdpartylicenses.txt has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 25.02 KB -> 4.81 KB 
+
+      Time: 20.3592ms
+gzipper: File favicon.ico has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 19.06 KB -> 1.49 KB 
+
+      Time: 25.0861ms
+gzipper: File assets\share-rejection-explanations.json has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 2.12 KB -> 771 B 
+
+      Time: 8.7081ms
+gzipper: File index.html has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 5.13 KB -> 2.02 KB 
+
+      Time: 7.2619ms
+gzipper: File polyfills.180f022a61085ac8.js has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 33.98 KB -> 12.24 KB 
+
+      Time: 35.7445ms
+gzipper: File runtime.249c7a60d4c7096d.js has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 1.13 KB -> 689 B 
+
+      Time: 5.041ms
+gzipper: File bitcoin.pdf has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 179.97 KB -> 174.4 KB 
+
+      Time: 15.7938ms
+gzipper: File styles.aef65f365c92ea7a.css has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 538.88 KB -> 57.27 KB 
+
+      Time: 22.68ms
+gzipper: File main.a26399af2e397c71.js has been compressed. 
+
+      Algorithm: GZIP 
+
+      Size: 1.35 MB -> 370.39 KB 
+
+      Time: 114.2777ms
+[30;42mgzipper:[0m[32m 9 files have been compressed. (247.3445ms)[0m
+Removed file: dist\axe-os\3rdpartylicenses.txt
+Removed file: dist\axe-os\favicon.ico
+Removed file: dist\axe-os\bitcoin.pdf
+Removed file: dist\axe-os\index.html
+Removed file: dist\axe-os\main.a26399af2e397c71.js
+Removed file: dist\axe-os\polyfills.180f022a61085ac8.js
+Removed file: dist\axe-os\styles.aef65f365c92ea7a.css
+Removed file: dist\axe-os\runtime.249c7a60d4c7096d.js
+Removed file: dist\axe-os\assets\share-rejection-explanations.json
+fatal: not a git repository (or any of the parent directories): .git
+Not a git repository, using default version: v3.0.0-ETHERNET-TEST
+Generated E:\MLH BTC\ESP-Miner-MLH\main\http_server\axe-os\dist\axe-os\version.txt with version v3.0.0-ETHERNET-TEST

@@ -1,0 +1,41 @@
+table {
+    border-collapse: collapse;
+}
+th,
+td {
+    padding: 0 0.5rem 0.5rem;
+    white-space: nowrap;
+    text-align: left;
+    vertical-align: top;
+
+    &:first-child {
+        padding-left: 0;
+    }
+    &:last-child {
+        padding-right: 0;
+        text-align: right;
+    }
+}
+td {
+    padding-top: 0.5rem;
+
+    p {
+        line-height: 1.4;
+    }
+}
+tbody tr {
+    border-top: 1px solid var(--surface-border);
+
+    &:last-child td {
+        padding-bottom: 0;
+    }
+}
+
+.button-text {
+    min-width: 8rem;
+}
+::ng-deep .p-button.button-icon {
+    width: 2.2rem;
+    height: 2.2rem;
+    margin-top: 0.25rem;
+}

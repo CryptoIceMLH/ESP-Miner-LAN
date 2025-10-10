@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "ethernet_w5500.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_REQUIRES
+        "driver"
+        "esp_eth"
+        "esp_netif"
+        "esp_event"
+)

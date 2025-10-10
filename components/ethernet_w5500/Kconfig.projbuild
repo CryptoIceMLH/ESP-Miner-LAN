@@ -1,0 +1,98 @@
+menu "Ethernet W5500 Configuration"
+
+    config ENABLE_ETHERNET
+        bool "Enable Ethernet W5500 Support"
+        default n
+        help
+            Enable W5500 Ethernet module support via SPI.
+            When disabled, WiFi is the only network option.
+
+    menu "W5500 SPI Pin Configuration"
+        depends on ENABLE_ETHERNET
+
+        config W5500_SPI_MOSI
+            int "SPI MOSI GPIO"
+            default 40
+            help
+                GPIO pin for SPI MOSI (Master Out Slave In).
+                Default uses BAP port pin.
+
+        config W5500_SPI_MISO
+            int "SPI MISO GPIO"
+            default 39
+            help
+                GPIO pin for SPI MISO (Master In Slave Out).
+                Default uses BAP port pin.
+
+        config W5500_SPI_SCLK
+            int "SPI SCLK GPIO"
+            default 41
+            help
+                GPIO pin for SPI clock signal.
+                Default uses BAP port pin.
+
+        config W5500_SPI_CS
+            int "SPI CS GPIO"
+            default 42
+            help
+                GPIO pin for SPI chip select.
+                Default uses BAP port pin.
+
+        config W5500_INT_GPIO
+            int "Interrupt GPIO (optional)"
+            default -1
+            help
+                GPIO pin for W5500 interrupt signal.
+                Set to -1 to disable interrupt usage.
+
+        config W5500_SPI_CLOCK_MHZ
+            int "SPI Clock Speed (MHz)"
+            default 2
+            range 1 40
+            help
+                SPI clock speed in MHz for W5500 communication.
+                W5500 supports up to 80MHz, but 2MHz is safer for clone chips.
+
+    endmenu
+
+    menu "W5500 IP Configuration"
+        depends on ENABLE_ETHERNET
+
+        config W5500_USE_DHCP
+            bool "Use DHCP for IP configuration"
+            default y
+            help
+                Enable DHCP client to automatically obtain IP address.
+                If disabled, static IP configuration below will be used.
+
+        config W5500_STATIC_IP
+            string "Static IP Address"
+            depends on !W5500_USE_DHCP
+            default "192.168.1.121"
+            help
+                Static IP address for Ethernet interface when DHCP is disabled.
+
+        config W5500_GATEWAY
+            string "Gateway Address"
+            depends on !W5500_USE_DHCP
+            default "192.168.1.1"
+            help
+                Gateway IP address for static configuration.
+
+        config W5500_SUBNET
+            string "Subnet Mask"
+            depends on !W5500_USE_DHCP
+            default "255.255.255.0"
+            help
+                Subnet mask for static IP configuration.
+
+        config W5500_DNS
+            string "DNS Server"
+            depends on !W5500_USE_DHCP
+            default "8.8.8.8"
+            help
+                DNS server address for static IP configuration.
+
+    endmenu
+
+endmenu
