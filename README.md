@@ -198,7 +198,7 @@ To use a static IP address:
 3. Alternatively, modify the Ethernet initialization code in `components/ethernet_w5500/ethernet_w5500.c`
 
 ## References 
-- **W5500 Datasheet**: https://www.wiznet.io/product-item/w5500/
+- **W5500 Datasheet**: [https://www.wiznet.io/product-item/w5500/](https://docs.wiznet.io/Product/Chip/Ethernet/W5500)
 - **ESP-IDF Ethernet Documentation**: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/network/esp_eth.html
 - **BitAxe Project**: https://github.com/bitaxeorg/bitaxe
 - **ORIGINAL ESP-Miner Firmware**: https://github.com/bitaxeorg/ESP-Miner
