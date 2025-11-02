@@ -835,13 +835,31 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     float frequency = nvs_config_get_float(NVS_CONFIG_ASIC_FREQUENCY_FLOAT, CONFIG_ASIC_FREQUENCY);
     float expected_hashrate = frequency * GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count * GLOBAL_STATE->DEVICE_CONFIG.family.asic_count / 1000.0;
 
-    uint8_t mac[6];
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    uint8_t mac[6] = {0};
+    esp_err_t mac_err = esp_wifi_get_mac(WIFI_IF_STA, mac);
+    if (mac_err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi_get_mac failed (%s); reading from eFuse", esp_err_to_name(mac_err));
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    }
     char formattedMac[18];
     snprintf(formattedMac, sizeof(formattedMac), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    int8_t wifi_rssi = -90;
-    get_wifi_current_rssi(&wifi_rssi);
+    wifi_mode_t wifi_mode;
+    bool wifi_active = true;
+    esp_err_t wifi_mode_err = esp_wifi_get_mode(&wifi_mode);
+    if (wifi_mode_err != ESP_OK || wifi_mode == WIFI_MODE_NULL) {
+        wifi_active = false;
+    }
+
+    int8_t wifi_rssi = -128;
+    if (wifi_active) {
+        if (get_wifi_current_rssi(&wifi_rssi) != ESP_OK) {
+            wifi_rssi = -128;
+        }
+    }
+
+    const char *wifi_status_out = wifi_active ? GLOBAL_STATE->SYSTEM_MODULE.wifi_status
+                                              : "Disabled (Ethernet mode)";
 
     cJSON * root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "power", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.power);
@@ -871,7 +889,7 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddStringToObject(root, "hostname", hostname);
     cJSON_AddStringToObject(root, "ipv4", ipv4);
     cJSON_AddStringToObject(root, "ipv6", ipv6);
-    cJSON_AddStringToObject(root, "wifiStatus", GLOBAL_STATE->SYSTEM_MODULE.wifi_status);
+    cJSON_AddStringToObject(root, "wifiStatus", wifi_status_out);
     cJSON_AddNumberToObject(root, "wifiRSSI", wifi_rssi);
     cJSON_AddNumberToObject(root, "apEnabled", GLOBAL_STATE->SYSTEM_MODULE.ap_enabled);
 
