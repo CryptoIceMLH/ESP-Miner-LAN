@@ -850,16 +850,13 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     if (wifi_mode_err != ESP_OK || wifi_mode == WIFI_MODE_NULL) {
         wifi_active = false;
     }
-
     int8_t wifi_rssi = -128;
     if (wifi_active) {
         if (get_wifi_current_rssi(&wifi_rssi) != ESP_OK) {
             wifi_rssi = -128;
         }
     }
-
-    const char *wifi_status_out = wifi_active ? GLOBAL_STATE->SYSTEM_MODULE.wifi_status
-                                              : "Disabled (Ethernet mode)";
+    const char *wifi_status_out = wifi_active ? GLOBAL_STATE->SYSTEM_MODULE.wifi_status : "Disabled (Ethernet mode)";
 
     cJSON * root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "power", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.power);

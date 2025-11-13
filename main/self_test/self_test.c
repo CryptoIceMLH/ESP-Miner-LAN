@@ -71,9 +71,15 @@ static bool should_test() {
 }
 
 static void reset_self_test() {
-    ESP_LOGI(TAG, "Long press detected...");
-    // Give the semaphore back
+    ESP_LOGI(TAG, "Long press detected - clearing self-test flag and restarting...");
+    // Clear the self-test flag from NVS
+    nvs_config_set_u16(NVS_CONFIG_SELF_TEST, 0);
+    // Flush all pending NVS writes
+    nvs_config_commit();
+    // Give the semaphore back (for backward compatibility if still used)
     xSemaphoreGive(longPressSemaphore);
+    // Restart the device
+    esp_restart();
 }
 
 static void display_msg(char * msg, GlobalState * GLOBAL_STATE) 
@@ -500,16 +506,10 @@ static void tests_done(GlobalState * GLOBAL_STATE, bool isTestPassed)
             ESP_LOGI(TAG, "SELF-TEST FAIL! -- Hold BOOT button for 2 seconds to cancel self-test, or press RESET to run self-test again.");
             GLOBAL_STATE->SELF_TEST_MODULE.finished = "Hold BOOT button for 2 seconds to cancel self-test, or press RESET to run self-test again.";
             GLOBAL_STATE->SELF_TEST_MODULE.is_finished = true;
-            while (1) {
-                // Wait here forever until reset_self_test() gives the longPressSemaphore
-                if (xSemaphoreTake(longPressSemaphore, portMAX_DELAY) == pdTRUE) {
-                    ESP_LOGI(TAG, "Self-test flag cleared");
-                    nvs_config_set_u16(NVS_CONFIG_SELF_TEST, 0);
-                    // flush all pending NVS writes
-                    nvs_config_commit();
-                    esp_restart();
-                }
-            }
+            // NOTE: Don't block here - let initialization complete
+            // The button handler will trigger reset_self_test() when user holds BOOT button
+            // This prevents task watchdog timeouts and keeps the system responsive
+            ESP_LOGI(TAG, "System will continue initialization. Self-test screen will remain visible.");
         } else {
             ESP_LOGI(TAG, "SELF-TEST FAIL -- Press RESET button to restart.");
             GLOBAL_STATE->SELF_TEST_MODULE.finished = "Press RESET button to restart.";

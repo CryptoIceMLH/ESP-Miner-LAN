@@ -140,6 +140,11 @@ esp_err_t ethernet_w5500_init(void) {
         return ret;
     }
 
+    // Wait for W5500 chip to stabilize after power-on
+    // W5500 datasheet requires ~50ms for power stabilization + PLL lock
+    ESP_LOGI(TAG, "Waiting 100ms for W5500 chip stabilization...");
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     // Generate MAC address
     generate_mac_address(eth_mac_addr);
     ESP_LOGI(TAG, "MAC: %02X:%02X:%02X:%02X:%02X:%02X",

@@ -63,6 +63,9 @@ void app_main(void)
     SYSTEM_init_system(&GLOBAL_STATE);
     statistics_init(&GLOBAL_STATE);
 
+    // Initialize network infrastructure ONCE before any interface init
+    network_infrastructure_init();
+
     // Read network mode to determine which interface to initialize
     char *network_mode_str = nvs_config_get_string(NVS_CONFIG_NETWORK_MODE, "wifi");
     bool use_ethernet = (strcmp(network_mode_str, "ethernet") == 0);

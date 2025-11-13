@@ -6,7 +6,7 @@ try {
     version = require('child_process').execSync('git describe --tags --always --dirty').toString().trim();
 } catch (e) {
     // Not a git repository, use default version
-    version = 'v3.0.0';
+    version = 'v3.1.0';
     console.log('Not a git repository, using default version:', version);
 }
 

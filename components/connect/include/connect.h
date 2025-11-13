@@ -15,6 +15,9 @@ typedef struct {
     wifi_auth_mode_t authmode;
 } wifi_ap_record_simple_t;
 
+// Network infrastructure (must be called before WiFi/Ethernet init)
+void network_infrastructure_init(void);
+
 // WiFi functions
 void toggle_wifi_softap(void);
 void wifi_init(void * GLOBAL_STATE);

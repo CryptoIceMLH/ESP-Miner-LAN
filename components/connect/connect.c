@@ -347,6 +347,13 @@ esp_netif_t * wifi_init_sta(const char * wifi_ssid, const char * wifi_pass)
 
     return esp_netif_sta;
 }
+void network_infrastructure_init(void)
+{
+    ESP_LOGI(TAG, "Initializing network infrastructure (netif + event loop)");
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_LOGI(TAG, "Network infrastructure initialized successfully");
+}
 
 void wifi_init(void * pvParameters)
 {
@@ -358,9 +365,6 @@ void wifi_init(void * pvParameters)
     GLOBAL_STATE->SYSTEM_MODULE.ssid[sizeof(GLOBAL_STATE->SYSTEM_MODULE.ssid)-1] = 0;
 
     free(wifi_ssid);
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
@@ -569,10 +573,6 @@ void ethernet_init(GlobalState *state)
     if (state->ETHERNET_MODULE.network_mode == NETWORK_MODE_ETHERNET) {
         // Ethernet mode selected - fully initialize with DHCP/networking
         ESP_LOGI(TAG, "Network mode: Ethernet - Initializing W5500...");
-
-        // Initialize network interface and event loop (required for esp_eth)
-        ESP_ERROR_CHECK(esp_netif_init());
-        ESP_ERROR_CHECK(esp_event_loop_create_default());
 
         esp_err_t ret = ethernet_w5500_init();
         if (ret == ESP_OK) {
