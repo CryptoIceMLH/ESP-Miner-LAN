@@ -21,6 +21,7 @@ Stay Tuned for updates!
 # W5500 Ethernet Module Wiring Guide
 
 This guide provides the pin connections required to add W5500 Ethernet connectivity to your BitAxe miner running the ESP-Miner-LAN firmware.
+the FW is an evolution of the original bitaxe firware and is based on v2.10.1
 
 ## Table of Contents
 - [Overview](#overview)
